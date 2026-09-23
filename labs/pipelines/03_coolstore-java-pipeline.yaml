@@ -1,0 +1,100 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: coolstore-java-pipeline
+spec:
+  params:
+    - name: APP_NAME
+      type: string
+    - name: APP_GIT_URL
+      type: string
+    - name: APP_GIT_CONTEXT
+      type: string
+    - name: NAMESPACE
+      type: string
+    - name: APP_GIT_REVISION
+      type: string
+  tasks:
+    - name: git-clone
+      params:
+        - name: URL
+          value: $(params.APP_GIT_URL)
+        - name: REVISION
+          value: $(params.APP_GIT_REVISION)
+        - name: SUBMODULES
+          value: 'true'
+        - name: DEPTH
+          value: '1'
+        - name: SSL_VERIFY
+          value: 'true'
+        - name: DELETE_EXISTING
+          value: 'true'
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+    - name: s2i-java
+      params:
+        - name: VERSION
+          value: openjdk-21-ubi8
+        - name: CONTEXT
+          value: $(params.APP_GIT_CONTEXT)
+        - name: TLS_VERIFY
+          value: 'false'
+        - name: ENV_VARS
+          value: 
+            - "MAVEN_MIRROR_URL=http://nexus.opentlc-shared.svc:8081/repository/maven-all-public"
+            - "MAVEN_CLEAR_REPO=true"
+        - name: IMAGE
+          value: >-
+            image-registry.openshift-image-registry.svc:5000/$(params.NAMESPACE)/$(params.APP_NAME)-coolstore
+      runAfter:
+        - git-clone
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: s2i-java
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+    - name: argocd-task-sync-and-wait
+      params:
+        - name: application-name
+          value: $(params.APP_NAME)
+      runAfter:
+        - s2i-java
+      taskRef:
+        kind: Task
+        name: argocd-task-sync-and-wait
+    - name: openshift-client
+      params:
+        - name: SCRIPT
+          value: oc rollout status deployment/$(params.APP_NAME)-coolstore
+      runAfter:
+        - argocd-task-sync-and-wait
+      taskRef:
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+        resolver: cluster
+  workspaces:
+    - name: shared-workspace
+
