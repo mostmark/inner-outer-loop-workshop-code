@@ -1,5 +1,9 @@
 ---
-apiVersion: tekton.dev/v1beta1
+# Node.js components: git-clone -> s2i-nodejs (Node.js 22) -> Argo CD sync -> rollout status.
+# Started by .tasks/pipeline_deploy_coolstore.sh (Pipeline - Deploy Coolstore) with
+# ARGOCD_APP_NAME=<svc>-<user>. Needs the Task argocd-task-sync-and-wait (00_argocd-task.yaml),
+# the ConfigMap argocd-env-configmap and the Secret argocd-env-secret in the same namespace.
+apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: coolstore-nodejs-pipeline
@@ -7,14 +11,23 @@ spec:
   params:
     - name: APP_NAME
       type: string
+      description: component name (inventory, catalog, gateway or web)
     - name: APP_GIT_URL
       type: string
+      description: Git repository with the source code
     - name: APP_GIT_CONTEXT
       type: string
+      description: directory of the component in the Git repository
     - name: NAMESPACE
       type: string
+      description: namespace of the target ImageStream (cn-project-<user>)
     - name: APP_GIT_REVISION
       type: string
+      description: Git revision to build
+      default: main
+    - name: ARGOCD_APP_NAME
+      type: string
+      description: Argo CD Application to sync (<svc>-<user>)
   tasks:
     - name: git-clone
       params:
@@ -31,6 +44,7 @@ spec:
         - name: DELETE_EXISTING
           value: 'true'
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -38,12 +52,13 @@ spec:
             value: git-clone
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
       workspaces:
         - name: output
           workspace: shared-workspace
     - name: s2i-nodejs
       params:
+        - name: VERSION
+          value: 22-ubi9
         - name: CONTEXT
           value: $(params.APP_GIT_CONTEXT)
         - name: TLS_VERIFY
@@ -54,6 +69,7 @@ spec:
       runAfter:
         - git-clone
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -61,14 +77,13 @@ spec:
             value: s2i-nodejs
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
       workspaces:
         - name: source
           workspace: shared-workspace
     - name: argocd-task-sync-and-wait
       params:
         - name: application-name
-          value: $(params.APP_NAME)
+          value: $(params.ARGOCD_APP_NAME)
       runAfter:
         - s2i-nodejs
       taskRef:
@@ -81,6 +96,7 @@ spec:
       runAfter:
         - argocd-task-sync-and-wait
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -88,7 +104,5 @@ spec:
             value: openshift-client
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
   workspaces:
     - name: shared-workspace
-
