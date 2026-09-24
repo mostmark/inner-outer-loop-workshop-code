@@ -40,9 +40,12 @@ SERVICE='del(.items[].spec.clusterIP, .items[].spec.clusterIPs)
 ROUTE='del(.items[].spec.host)
   | (.items[] | select(.spec.port.targetPort == "8080-tcp" or .spec.port.targetPort == "port-8080") | .spec.port.targetPort) = "http"'
 
+# resolve-names (added by the Quarkus OpenShift extension) makes OpenShift rewrite the image tag
+# to a digest in the live Deployment, which Argo CD would report as permanent drift.
 DEPLOYMENT='del(
     .items[].metadata.annotations."deployment.kubernetes.io/revision",
     .items[].metadata.annotations."image.openshift.io/triggers",
+    .items[].spec.template.metadata.annotations."alpha.image.policy.openshift.io/resolve-names",
     .items[].spec.template.spec.initContainers,
     .items[].spec.template.spec.containers[].command,
     .items[].spec.template.spec.containers[].args,
