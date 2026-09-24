@@ -11,3 +11,7 @@ tmp/
 .DS_Store
 bower_components/
 node_modules/
+# Generated at start-up by the gulp "config" task (server.js)
+app/coolstore.config.js
+# bin/www is the start script (the repository root .gitignore ignores bin/)
+!bin/

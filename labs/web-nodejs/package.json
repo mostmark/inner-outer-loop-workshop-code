@@ -10,7 +10,6 @@
     "security-check": "nsp check",
     "ci": "npm run lint && npm run coveralls",
     "release": "standard-version -a",
-    "openshift": "nodeshift --strictSSL=false --dockerImage=registry.access.redhat.com/rhoar-nodejs/nodejs-10",
     "postinstall": "license-reporter report -s && license-reporter save -s --xml licenses.xml",
     "start": "node ."
   },
@@ -39,12 +38,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RedHat-EMEA-SSA-Team/end-to-end-developer-workshop.git"
+    "url": "git+https://github.com/mostmark/inner-outer-loop-workshop-code.git"
   },
   "bugs": {
-    "url": "https://github.com/RedHat-EMEA-SSA-Team/end-to-end-developer-workshop/issues"
+    "url": "https://github.com/mostmark/inner-outer-loop-workshop-code/issues"
   },
-  "homepage": "https://github.com/RedHat-EMEA-SSA-Team/end-to-end-developer-workshop#readme",
+  "homepage": "https://github.com/mostmark/inner-outer-loop-workshop-code#readme",
   "devDependencies": {
     "js-yaml": "~3.13.1",
     "nodeshift": "~3.0.0",

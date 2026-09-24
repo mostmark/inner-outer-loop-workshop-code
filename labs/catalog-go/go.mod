@@ -1,7 +1,5 @@
-module routes.go
+module catalog-go
 
-go 1.12
+go 1.22
 
 require github.com/gorilla/mux v1.8.1
-
-replace github.com/gorilla/mux => github.com/gorilla/mux v1.8.0

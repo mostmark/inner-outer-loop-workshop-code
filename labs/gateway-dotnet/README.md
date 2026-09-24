@@ -1,82 +1,66 @@
+# Gateway Service (.NET)
 
-.NET Core Gateway Service
-===
-## Introduction
-This microservice has been converted from the original Vert.x implementation and now targets .NET Core 3.1
+ASP.NET Core service (.NET 9, `net9.0`) that combines the product list of the Catalog Service with
+the availability data of the Inventory Service. It replaces the original Vert.x gateway.
 
-![](https://raw.githubusercontent.com/alexgroom/cnw3/master/gateway-dotnet/wwwroot/240px-NET_Core_Logo.png)
+![.NET logo](wwwroot/240px-NET_Core_Logo.png)
 
+## Endpoints
 
-The component can be built/deployed in many different ways for example:
+| Path | Description |
+|---|---|
+| `/api/products` | Products from the Catalog Service, enriched with the quantity from the Inventory Service |
+| `/health` | Health check (used by the liveness and readiness probes) |
+| `/` | Test page |
 
-* Using +Add from the OpenShift web console developer 
-    * From Git
-    * From Dockerfile
-* Via oc new-app
-* Via Docker
-* Command line locally
+## Configuration
 
-## Environment Variables
-The Gateway service is dependent on the Catalog and Inventory services, so without links to these it cannot function. The current implmentation will typically fail to start cleanly without these enviroment variables set
-* INVENTORY_COOLSTORE_SERVICE_HOST
-* INVENTORY_COOLSTORE_SERVICE_PORT
-* CATALOG_COOLSTORE_SERVICE_HOST
-* CATALOG_COOLSTORE_SERVICE_PORT
+The gateway calls the other services through their Kubernetes Service names. Override them with
+environment variables if needed:
 
-## URLs
-As before the main entry point to the service API is via ``<hostname>/api/products`` and this returns an amalgamation of the product infortmation collected from the Catalog service with the availability amount coming from the Inventory service.
+| Variable | Default |
+|---|---|
+| `COMPONENT_CATALOG_COOLSTORE_HOST` | `catalog-coolstore` |
+| `COMPONENT_CATALOG_COOLSTORE_PORT` | `8080` |
+| `COMPONENT_INVENTORY_COOLSTORE_HOST` | `inventory-coolstore` |
+| `COMPONENT_INVENTORY_COOLSTORE_PORT` | `8080` |
 
-There is test page displayed on the base URL.
+## Build and deploy on OpenShift (as in the workshop)
 
+The devfile command **Gateway - Build and Deploy Component** runs a binary S2I build with the
+`dotnet:9.0` image stream and creates a Deployment, a Service and a Route:
 
-## Build and Deploy from CLI
-
+```bash
+oc new-build dotnet:9.0 --name gateway-coolstore --labels=component=gateway \
+  --env DOTNET_STARTUP_PROJECT=app.csproj --binary=true
+oc start-build gateway-coolstore --from-dir=. -w
+oc new-app gateway-coolstore:latest --name gateway-coolstore \
+  --labels=app=coolstore,app.kubernetes.io/instance=gateway,app.kubernetes.io/part-of=coolstore,app.kubernetes.io/name=gateway,app.openshift.io/runtime=dotnet,component=gateway
+oc expose svc gateway-coolstore
 ```
-oc new-app dotnet:3.1~https://github.com/alexgroom/cnw3.git \
-  --context-dir=gateway-dotnet --name=gateway \
-  --as-deployment-config\
-  -l app.openshift.io/runtime=dotnet \
-  -e CATALOG_COOLSTORE_SERVICE_HOST=catalog -e INVENTORY_COOLSTORE_SERVICE_HOST=inventory -e CATALOG_COOLSTORE_SERVICE_PORT=8080 -e INVENTORY_COOLSTORE_SERVICE_PORT=8080
-oc expose svc gateway
 
-```
+In the Outer Loop, the `coolstore-dotnet-pipeline` (`labs/pipelines`) builds the same code with the
+`s2i-dotnet` Task (`VERSION` `9.0`, `CONTEXT` `labs/gateway-dotnet`).
+
 ## Local build
-Fetch the source from the sub folder and then use the dotnet tooling to build and run. Note that environment variables must be set up to point to the dependent services that maybe running locally or even exposed via OpenShift.
-```
-$ dotnet restore
-$ dotnet build
-$ export CATALOG_COOLSTORE_SERVICE_HOST=catalog
-$ export INVENTORY_COOLSTORE_SERVICE_HOST=inventory 
-$ export CATALOG_COOLSTORE_SERVICE_PORT=8080 
-$ export INVENTORY_COOLSTORE_SERVICE_PORT=8080
-$ dotnet run
-```
-## Docker command line
-Fetch the source then build via the supplied Dockerfile. You may need to login in to access the redhat registry to pull the ubi8 as a base.
 
-```
-$ docker login registry.redhat.io
-$ docker pull registry.redhat.io/ubi8/dotnet-31-runtime
-
-
-$ docker build -t gateway .
-$ docker run --env CATALOG_COOLSTORE_SERVICE_HOST=localhost \
---env INVENTORY_COOLSTORE_SERVICE_HOST=localhost \
---env CATALOG_COOLSTORE_SERVICE_PORT=80 \
---env INVENTORY_COOLSTORE_SERVICE_PORT=80 \
- gateway
-```
-## +Add from Git or Dockerfile
-The OpenShift web console can build this service either directly from Git source using S2I or via the dockerfile and the tools built into the base image.
-
-In both case you need to specify the git library and (in Advanced settings) the context folder. Choose an application name like "gateway"
-
-For a Git build you must select the appropriate builder and version, this will be .NET Core and version 3.1. 
-
-For the Dockerfile based version, an extra label can be addeded to indicate the running service is .NET.
-
-```
-oc label dc gateway app.openshift.io/runtime=dotnet
+```bash
+dotnet restore
+dotnet build
+export COMPONENT_CATALOG_COOLSTORE_HOST=localhost COMPONENT_CATALOG_COOLSTORE_PORT=8081
+export COMPONENT_INVENTORY_COOLSTORE_HOST=localhost COMPONENT_INVENTORY_COOLSTORE_PORT=8082
+dotnet run
 ```
 
+## Container build
 
+The [`Dockerfile`](Dockerfile) builds with `registry.access.redhat.com/ubi8/dotnet-90` and runs on
+`registry.access.redhat.com/ubi8/dotnet-90-runtime` (both available without registry login):
+
+```bash
+podman build --platform linux/amd64 -t gateway-coolstore .
+podman run --rm -p 8080:8080 \
+  -e COMPONENT_CATALOG_COOLSTORE_HOST=host.containers.internal \
+  -e COMPONENT_INVENTORY_COOLSTORE_HOST=host.containers.internal \
+  gateway-coolstore
+```
