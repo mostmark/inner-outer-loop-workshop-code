@@ -84,7 +84,7 @@ do
 
     echo "Exporting resources for ${COMPONENT}-coolstore..."
     mkdir -p "${COMPONENT_DIR}"
-    rm -f "${COMPONENT_DIR}"/{secret,service,route,configmap,deployment,deploymentconfig}.yaml
+    rm -f "${COMPONENT_DIR}"/{secret,service,route,configmap,deployment}.yaml
 
     export_kind secret "${COMPONENT_DIR}/secret.yaml" || exit 1
     export_kind service "${COMPONENT_DIR}/service.yaml" "${SERVICE}" || exit 1
