@@ -1,9 +1,10 @@
+#!/bin/bash
 ##############################
 # inventory-quarkus Solution #
 ##############################
 
-DIRECTORY=`dirname $0`
+DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
 
-cp -R $DIRECTORY/src $DIRECTORY/../../../labs/inventory-quarkus
+cp -R "${DIRECTORY}/src" "${DIRECTORY}/../../../labs/inventory-quarkus"
 
 echo "Inventory Quarkus Solved"

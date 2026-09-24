@@ -1,21 +1,29 @@
+#!/bin/bash
 #########################
 # Service Mesh Solution #
 #########################
+#
+# Adds catalog, inventory and gateway to the mesh (sidecar injection label), deploys a per-user
+# ingress gateway (gateway injection) with Gateway/VirtualService, points the web front end to it,
+# deploys the Go Catalog Service v2 and routes all catalog traffic to v2.
+#
+# Usage: deploy.sh [USER]   (default: the workspace user)
 
-DIRECTORY=`dirname $0`
-USER_ID=$1
-APPS_HOSTNAME_SUFFIX=$(oc whoami --show-console | sed 's%.*\(apps.*\)$%\1%g')
+DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
+. "${DIRECTORY}/../../workshop-env.sh"
+workshop_set_user "$1"
+NS="${STAGING_PROJECT}"
+GATEWAY_LABEL="ingressgateway-${WORKSHOP_USER}"
 
-oc project cn-project${USER_ID}
+oc project "${NS}" > /dev/null || exit 1
 
-oc patch deployment/catalog-coolstore --patch '{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}}}' -n cn-project${USER_ID}
-
-oc patch deployment/inventory-coolstore --patch '{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}}}' -n cn-project${USER_ID}
-
-oc patch deployment/gateway-coolstore --patch '{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}}}' -n cn-project${USER_ID}
+INJECT_PATCH='{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}}}'
+for deployment in catalog-coolstore inventory-coolstore gateway-coolstore; do
+  oc patch "deployment/${deployment}" --patch "${INJECT_PATCH}" -n "${NS}" || exit 1
+done
 
 ## Create the local gateway
-cat << EOF | oc apply -f -
+oc apply -n "${NS}" -f - << YAML || exit 1
 apiVersion: v1
 kind: Service
 metadata:
@@ -23,7 +31,7 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    istio: ingressgateway${USER_ID}
+    istio: ${GATEWAY_LABEL}
   ports:
   - name: http2
     port: 80
@@ -31,11 +39,12 @@ spec:
   - name: https
     port: 443
     targetPort: 8443
-EOF
+YAML
 
-oc expose service istio-ingressgateway
+oc get route istio-ingressgateway -n "${NS}" > /dev/null 2>&1 ||
+  oc expose service istio-ingressgateway --port=http2 -n "${NS}" || exit 1
 
-cat << EOF | oc apply -f -
+oc apply -n "${NS}" -f - << YAML || exit 1
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,7 +52,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      istio: ingressgateway${USER_ID}
+      istio: ${GATEWAY_LABEL}
   template:
     metadata:
       annotations:
@@ -51,24 +60,23 @@ spec:
         inject.istio.io/templates: gateway
       labels:
         # Set a unique label for the gateway. This is required to ensure Gateways can select this workload
-        istio: ingressgateway${USER_ID}
+        istio: ${GATEWAY_LABEL}
         # Enable gateway injection. If connecting to a revisioned control plane, replace with "istio.io/rev: revision-name"
         sidecar.istio.io/inject: "true"
     spec:
       containers:
       - name: istio-proxy
         image: auto # The image will automatically update each time the pod starts.
-EOF
+YAML
 
-cat << EOF | oc apply -f -
-apiVersion: networking.istio.io/v1beta1
+oc apply -n "${NS}" -f - << YAML || exit 1
+apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
   name: ingressgateway
-  namespace: cn-project${USER_ID}
 spec:
   selector:
-    istio: ingressgateway${USER_ID} 
+    istio: ${GATEWAY_LABEL}
   servers:
     - port:
         number: 8080
@@ -76,14 +84,11 @@ spec:
         protocol: HTTP
       hosts:
         - "*"
-EOF
-
-cat << EOF | oc apply -f -
-apiVersion: networking.istio.io/v1beta1
+---
+apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: gateway-coolstore
-  namespace: cn-project${USER_ID}
 spec:
   hosts:
     - "*"
@@ -95,22 +100,24 @@ spec:
             port:
               number: 8080
             host: gateway-coolstore
-EOF
+YAML
 
-oc set env deployment/web-coolstore COOLSTORE_GW_ENDPOINT="http://istio-ingressgateway-cn-project${USER_ID}.${APPS_HOSTNAME_SUFFIX}"
+GATEWAY_HOST="$(oc get route istio-ingressgateway -n "${NS}" -o jsonpath='{.spec.host}')"
+oc set env deployment/web-coolstore COOLSTORE_GW_ENDPOINT="http://${GATEWAY_HOST}" -n "${NS}" || exit 1
 
-oc new-app https://github.com/RedHat-EMEA-SSA-Team/end-to-end-developer-workshop \
-    --strategy=docker \
-    --context-dir=/labs/catalog-go \
-    --name=catalog-coolstore-v2 \
-    --labels=app.kubernetes.io/part-of=coolstore,app.kubernetes.io/name=golang
+if ! oc get deployment catalog-coolstore-v2 -n "${NS}" > /dev/null 2>&1; then
+  oc new-app "${CODE_REPO_URL}#${CODE_REPO_REVISION}" -n "${NS}" \
+      --strategy=docker \
+      --context-dir=labs/catalog-go \
+      --name=catalog-coolstore-v2 \
+      --labels=app.kubernetes.io/part-of=coolstore,app.kubernetes.io/name=golang || exit 1
+fi
 
-cat << EOF | oc apply -f -
-apiVersion: networking.istio.io/v1beta1
+oc apply -n "${NS}" -f - << YAML || exit 1
+apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: catalog-coolstore
-  namespace: cn-project${USER_ID}
 spec:
   hosts:
     - catalog-coolstore
@@ -122,4 +129,6 @@ spec:
     - destination:
         host: catalog-coolstore-v2
       weight: 100
-EOF
+YAML
+
+echo "Service Mesh Done"

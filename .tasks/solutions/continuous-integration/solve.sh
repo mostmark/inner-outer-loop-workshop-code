@@ -1,39 +1,30 @@
-##################################
-# Continuus Integration Solution #
-##################################
+#!/bin/bash
+###################################
+# Continuous Integration Solution #
+###################################
+#
+# Pushes labs/inventory-quarkus to the participant's Gitea repository inventory-quarkus and
+# creates the Pipeline inventory-pipeline (git-clone + s2i-java) in cn-project-<user>.
+#
+# Usage: solve.sh [USER]   (default: the workspace user)
 
-DIRECTORY=`dirname $0`
-CONTEXT_FOLDER=/projects/workshop/labs/inventory-quarkus
-USER_ID=$1
+DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
+. "${DIRECTORY}/../../workshop-env.sh"
+workshop_set_user "$1"
+CONTEXT_FOLDER="${WORKSHOP_DIR}/labs/inventory-quarkus"
+GIT_URL="$(gitea_repo_url inventory-quarkus)"
 
-oc project cn-project${USER_ID}
+oc project "${STAGING_PROJECT}" > /dev/null || exit 1
 
-GITEA_URL=http://gitea-server.gitea.svc:3000
-GITEA_URL_WITH_CREDENTIALS=http://user${USER_ID}:openshift@gitea-server.gitea.svc:3000
+gitea_recreate_repo inventory-quarkus || exit 1
+git_push_dir "${CONTEXT_FOLDER}" inventory-quarkus || exit 1
 
-curl -X DELETE ${GITEA_URL_WITH_CREDENTIALS}/api/v1/repos/user${USER_ID}/inventory-quarkus \
-    -H  "accept: application/json" \
-    -H  "Content-Type: application/json"
-
-curl -X POST ${GITEA_URL_WITH_CREDENTIALS}/api/v1/user/repos \
-    -H  "accept: application/json" \
-    -H  "Content-Type: application/json" \
-    -d '{"name" : "inventory-quarkus"}' 
-
-cd ${CONTEXT_FOLDER}
-rm -rf .git
-git init
-git remote add origin ${GITEA_URL}/user${USER_ID}/inventory-quarkus.git
-git add *
-git commit -m "Initial"
-git push ${GITEA_URL_WITH_CREDENTIALS}/user${USER_ID}/inventory-quarkus.git
-
-cat << EOF | oc apply -f -
+oc apply -f - << YAML || exit 1
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
   name: inventory-pipeline-pvc
-  namespace: cn-project${USER_ID}
+  namespace: ${STAGING_PROJECT}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -41,20 +32,20 @@ spec:
     requests:
       storage: 1Gi
   volumeMode: Filesystem
-EOF
+YAML
 
-cat << EOF | oc apply -f -
-apiVersion: tekton.dev/v1beta1
+oc apply -f - << YAML || exit 1
+apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: inventory-pipeline
-  namespace: cn-project${USER_ID}
+  namespace: ${STAGING_PROJECT}
 spec:
   tasks:
     - name: git-clone
       params:
         - name: URL
-          value: 'http://gitea-server.gitea.svc:3000/user${USER_ID}/inventory-quarkus.git'
+          value: '${GIT_URL}'
         - name: SUBMODULES
           value: 'true'
         - name: DEPTH
@@ -64,8 +55,9 @@ spec:
         - name: DELETE_EXISTING
           value: 'true'
         - name: REVISION
-          value: master
+          value: main
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -73,30 +65,27 @@ spec:
             value: git-clone
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
       workspaces:
         - name: output
           workspace: shared-workspace
     - name: s2i-java
       params:
         - name: VERSION
-          value: openjdk-21-ubi8
+          value: openjdk-21-ubi9
         - name: CONTEXT
           value: .
         - name: TLS_VERIFY
           value: 'false'
-        - name: MAVEN_CLEAR_REPO
-          value: 'false'
         - name: ENV_VARS
-          value: 
-            - "MAVEN_MIRROR_URL=http://nexus.opentlc-shared.svc:8081/repository/maven-all-public"
-            - "MAVEN_CLEAR_REPO=true"
+          value:
+            - 'MAVEN_MIRROR_URL=${MAVEN_MIRROR_URL}'
         - name: IMAGE
           value: >-
-            image-registry.openshift-image-registry.svc:5000/cn-project${USER_ID}/inventory-coolstore
+            image-registry.openshift-image-registry.svc:5000/${STAGING_PROJECT}/inventory-coolstore
       runAfter:
         - git-clone
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -104,14 +93,16 @@ spec:
             value: s2i-java
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
       workspaces:
         - name: source
           workspace: shared-workspace
   workspaces:
     - name: shared-workspace
-EOF
+YAML
 
-# tkn pipeline start inventory-pipeline -n cn-project${USER_ID} \
-#     --workspace name=shared-workspace,claimName=inventory-pipeline-pvc
-# tkn pipeline logs inventory-pipeline -n cn-project${USER_ID} --last -f
+echo "Continuous Integration Done"
+
+# Run it with:
+#   tkn pipeline start inventory-pipeline -n <cn-project-user> \
+#       --workspace name=shared-workspace,claimName=inventory-pipeline-pvc
+#   tkn pipeline logs inventory-pipeline -n <cn-project-user> --last -f

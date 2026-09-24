@@ -1,58 +1,51 @@
 #!/bin/bash
+#
+# Pushes the exported GitOps manifests (labs/gitops/<svc>-coolstore) to the participant's Gitea
+# repositories <svc>-gitops and creates the Argo CD Applications <svc>-<user> (AppProject and
+# destination namespace cn-project-<user>, manual sync). The Argo CD CLI authenticates with the
+# participant's API token (ARGOCD_AUTH_TOKEN).
+#
+# Usage: gitops_commit_configure_coolstore.sh [USER] [COMPONENT...]
+#        (defaults: the workspace user; catalog gateway web)
 
-DIRECTORY=`dirname $0`
-CONTEXT_FOLDER=/projects/workshop/labs/gitops
-USER_ID=$1
+DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
+. "${DIRECTORY}/workshop-env.sh"
+workshop_set_user "$1"
+shift
+CONTEXT_FOLDER="${WORKSHOP_DIR}/labs/gitops"
 
-echo "--- ArgoCD Applications for GitOps ---"
+declare -a COMPONENTS=("$@")
+[ ${#COMPONENTS[@]} -gt 0 ] || COMPONENTS=("catalog" "gateway" "web")
 
-#Gitea initialization
-GITEA_URL=http://gitea-server.gitea.svc:3000
-GITEA_URL_WITH_CREDENTIALS=http://user${USER_ID}:openshift@gitea-server.gitea.svc:3000
+echo "--- Argo CD Applications for GitOps ---"
 
-declare -a COMPONENTS=("catalog" "gateway" "web")
+argocd_env || exit 1
 
 for COMPONENT_NAME in "${COMPONENTS[@]}"
 do
-    echo "Creating '${COMPONENT_NAME}' ArgoCD Application ..."
+    echo "Creating '${COMPONENT_NAME}-${WORKSHOP_USER}' Argo CD Application ..."
 
-    REPO_NAME=${COMPONENT_NAME}"-gitops"
+    REPO_NAME="${COMPONENT_NAME}-gitops"
+    REPO_URL="$(gitea_repo_url "${REPO_NAME}")"
 
-    curl -X DELETE ${GITEA_URL_WITH_CREDENTIALS}/api/v1/repos/user${USER_ID}/${REPO_NAME} \
-        -H  "accept: application/json" \
-        -H  "Content-Type: application/json"
-        
-    curl -X POST ${GITEA_URL_WITH_CREDENTIALS}/api/v1/user/repos \
-        -H  "accept: application/json" \
-        -H  "Content-Type: application/json" \
-        -d '{"name" : "'${REPO_NAME}'"}' 
+    [ -d "${CONTEXT_FOLDER}/${COMPONENT_NAME}-coolstore" ] ||
+      { fail "${CONTEXT_FOLDER}/${COMPONENT_NAME}-coolstore not found. Run 'GitOps - Export Coolstore' first."; exit 1; }
 
-    cd ${CONTEXT_FOLDER}/${COMPONENT_NAME}-coolstore
-    rm -rf .git
-    git init
-    git remote add origin ${GITEA_URL}/user${USER_ID}/${REPO_NAME}.git
-    git add *
-    git commit -m "Initial"
-    git push ${GITEA_URL_WITH_CREDENTIALS}/user${USER_ID}/${REPO_NAME}.git
+    gitea_recreate_repo "${REPO_NAME}" || exit 1
+    git_push_dir "${CONTEXT_FOLDER}/${COMPONENT_NAME}-coolstore" "${REPO_NAME}" || exit 1
 
-    oc project cn-project${USER_ID}
+    workshop_argocd repo add "${REPO_URL}" --project "${STAGING_PROJECT}" --upsert ||
+      warn "Could not register ${REPO_URL} in Argo CD (public repositories work without it)"
 
-    #ArgoCD initialization
-    ARGOCD_SERVER=argocd-server.argocd.svc
-
-    argocd login ${ARGOCD_SERVER} --username user${USER_ID} --password openshift --plaintext
-
-    argocd repo add ${GITEA_URL}/user${USER_ID}/${REPO_NAME}.git
-
-    argocd app create ${COMPONENT_NAME}${USER_ID} \
-        --project "cn-project${USER_ID}" \
-        --sync-policy "none" \
-        --repo "${GITEA_URL}/user${USER_ID}/${REPO_NAME}.git" \
+    workshop_argocd app create "${COMPONENT_NAME}-${WORKSHOP_USER}" \
+        --project "${STAGING_PROJECT}" \
+        --sync-policy manual \
+        --repo "${REPO_URL}" \
         --revision "HEAD" \
         --path "." \
         --dest-server "https://kubernetes.default.svc" \
-        --dest-namespace "cn-project${USER_ID}"
-
+        --dest-namespace "${STAGING_PROJECT}" \
+        --upsert || exit 1
 done
 
-echo "--- ArgoCD Applications has been created! ---"
+ok "--- Argo CD Applications have been created! ---"

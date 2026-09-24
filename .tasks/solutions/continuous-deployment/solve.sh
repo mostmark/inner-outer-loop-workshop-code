@@ -1,75 +1,50 @@
+#!/bin/bash
 ##################################
-# Continuus Deployment Solution #
+# Continuous Deployment Solution #
 ##################################
+#
+# Creates the Task argocd-task-sync-and-wait and the ConfigMap argocd-env-configmap in
+# cn-project-<user>, checks the pre-created Secret argocd-env-secret (Argo CD API token) and
+# extends inventory-pipeline with the Argo CD sync and the rollout check.
+#
+# Usage: solve.sh [USER]   (default: the workspace user)
 
-DIRECTORY=`dirname $0`
-USER_ID=$1
-GITEA_URL=http://gitea-server.gitea.svc:3000
+DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
+. "${DIRECTORY}/../../workshop-env.sh"
+workshop_set_user "$1"
+GIT_URL="$(gitea_repo_url inventory-quarkus)"
 
-oc project cn-project${USER_ID}
+oc project "${STAGING_PROJECT}" > /dev/null || exit 1
 
-#Create ArgoCD Tekton task
-cat << EOF | oc apply -f -
-apiVersion: tekton.dev/v1beta1
-kind: Task
-metadata:
-  name: argocd-task-sync-and-wait
-  namespace: cn-project${USER_ID}
-  labels:
-    app.kubernetes.io/version: "0.1"
-  annotations:
-    tekton.dev/pipelines.minVersion: "0.12.1"
-    tekton.dev/tags: deploy
-    tekton.dev/displayName: "argocd"
-spec:
-  description: >-
-    As part of the Outer Loop lab this task syncs (deploys) an Argo CD application and waits for it to be healthy.
-    To do so, it requires the address of the Argo CD server and some form of
-    authentication either a username/password or an authentication token.
-  params:
-    - name: application-name
-      description: name of the application to sync
-  stepTemplate:
-    envFrom:
-      - configMapRef:
-          name: argocd-env-configmap  # used for server address
-      - secretRef:
-          name: argocd-env-secret  # used for authentication (username/password or auth token)
-  steps:
-    - name: login-sync-and-wait
-      image: quay.io/argoproj/argocd:v2.2.2
-      script: |
-        if [ -z $ARGOCD_AUTH_TOKEN ]; then
-          yes | argocd login \$ARGOCD_SERVER --username=\$ARGOCD_USERNAME --password=\$ARGOCD_PASSWORD --plaintext;
-        fi
-        argocd app sync \$(params.application-name)${USER_ID}
-        argocd app wait \$(params.application-name)${USER_ID} --health
-EOF
+# Argo CD Tekton Task
+oc apply -n "${STAGING_PROJECT}" -f "${WORKSHOP_DIR}/labs/pipelines/00_argocd-task.yaml" || exit 1
 
-#Create ArgoCD ConfigMap
-oc create configmap argocd-env-configmap \
-    --from-literal=ARGOCD_SERVER=argocd-server.argocd.svc \
-    -n cn-project${USER_ID}
+# Argo CD ConfigMap (server address)
+oc create configmap argocd-env-configmap -n "${STAGING_PROJECT}" \
+    --from-literal=ARGOCD_SERVER="${ARGOCD_SERVER}" \
+    --dry-run=client -o yaml | oc apply -n "${STAGING_PROJECT}" -f - || exit 1
 
-#Create ArgoCD secret
-oc create secret generic argocd-env-secret \
-    --from-literal=ARGOCD_USERNAME=user${USER_ID} \
-    --from-literal=ARGOCD_PASSWORD=openshift \
-    -n cn-project${USER_ID}
+# Argo CD Secret (API token): pre-created by the workshop provisioning, never stored in Git
+if ! oc get secret argocd-env-secret -n "${STAGING_PROJECT}" > /dev/null 2>&1; then
+  argocd_env || { fail "Secret argocd-env-secret is missing in ${STAGING_PROJECT}"; exit 1; }
+  warn "Secret argocd-env-secret is missing in ${STAGING_PROJECT}; creating it from ARGOCD_AUTH_TOKEN"
+  oc create secret generic argocd-env-secret -n "${STAGING_PROJECT}" \
+      --from-literal=ARGOCD_AUTH_TOKEN="${ARGOCD_AUTH_TOKEN}" || exit 1
+fi
 
-#Expand the existing pipeline
-cat << EOF | oc apply -f -
-apiVersion: tekton.dev/v1beta1
+# Expand the existing pipeline
+oc apply -f - << YAML || exit 1
+apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: inventory-pipeline
-  namespace: cn-project${USER_ID}
+  namespace: ${STAGING_PROJECT}
 spec:
   tasks:
     - name: git-clone
       params:
         - name: URL
-          value:  '${GITEA_URL}/user${USER_ID}/inventory-quarkus.git'
+          value: '${GIT_URL}'
         - name: SUBMODULES
           value: 'true'
         - name: DEPTH
@@ -79,8 +54,9 @@ spec:
         - name: DELETE_EXISTING
           value: 'true'
         - name: REVISION
-          value: master
+          value: main
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -88,29 +64,27 @@ spec:
             value: git-clone
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
       workspaces:
         - name: output
           workspace: shared-workspace
     - name: s2i-java
       params:
         - name: VERSION
-          value: openjdk-21-ubi8
-        - name: PATH_CONTEXT
+          value: openjdk-21-ubi9
+        - name: CONTEXT
           value: .
         - name: TLS_VERIFY
           value: 'false'
-        - name: MAVEN_CLEAR_REPO
-          value: 'false'
         - name: ENV_VARS
-          value: 
-            - "MAVEN_MIRROR_URL=http://nexus.opentlc-shared.svc:8081/repository/maven-all-public"
+          value:
+            - 'MAVEN_MIRROR_URL=${MAVEN_MIRROR_URL}'
         - name: IMAGE
           value: >-
-            image-registry.openshift-image-registry.svc:5000/cn-project${USER_ID}/inventory-coolstore
+            image-registry.openshift-image-registry.svc:5000/${STAGING_PROJECT}/inventory-coolstore
       runAfter:
         - git-clone
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -118,14 +92,13 @@ spec:
             value: s2i-java
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
       workspaces:
         - name: source
           workspace: shared-workspace
     - name: argocd-task-sync-and-wait
       params:
         - name: application-name
-          value: inventory
+          value: inventory-${WORKSHOP_USER}
       runAfter:
         - s2i-java
       taskRef:
@@ -138,6 +111,7 @@ spec:
       runAfter:
         - argocd-task-sync-and-wait
       taskRef:
+        resolver: cluster
         params:
           - name: kind
             value: task
@@ -145,8 +119,8 @@ spec:
             value: openshift-client
           - name: namespace
             value: openshift-pipelines
-        resolver: cluster
   workspaces:
     - name: shared-workspace
-EOF
+YAML
 
+echo "Continuous Deployment Done"

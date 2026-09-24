@@ -1,14 +1,23 @@
+#!/bin/bash
 ####################################
 # Coolstore Application Deployment #
 ####################################
+#
+# Fast-forward of the Outer Loop: Continuous Integration, GitOps, Continuous Deployment and
+# Service Mesh solutions for the staging project cn-project-<user>.
+# Requires the Inner Loop Coolstore in my-project-<user> (inner_loop_deploy_coolstore.sh).
+#
+# Usage: outer_loop_deploy_coolstore.sh [USER]   (default: the workspace user)
 
-DIRECTORY=`dirname $0`
-USER_ID=$1
+DIRECTORY="$(cd "$(dirname "$0")" && pwd)"
+. "${DIRECTORY}/workshop-env.sh"
+workshop_set_user "$1"
 
-$DIRECTORY/solutions/continuous-integration/solve.sh ${USER_ID}
-$DIRECTORY/solutions/gitops/solve.sh ${USER_ID}
-$DIRECTORY/solutions/continuous-deployment/solve.sh ${USER_ID}
-$DIRECTORY/solutions/continuous-deployment/deploy.sh ${USER_ID}
-$DIRECTORY/solutions/service-mesh/deploy.sh ${USER_ID}
+"${DIRECTORY}/solutions/continuous-integration/solve.sh" "${WORKSHOP_USER}" &&
+  "${DIRECTORY}/solutions/gitops/solve.sh" "${WORKSHOP_USER}" &&
+  "${DIRECTORY}/solutions/continuous-deployment/solve.sh" "${WORKSHOP_USER}" &&
+  "${DIRECTORY}/solutions/continuous-deployment/deploy.sh" "${WORKSHOP_USER}" &&
+  "${DIRECTORY}/solutions/service-mesh/deploy.sh" "${WORKSHOP_USER}" ||
+  { fail "The deployment of the Coolstore Application in ${STAGING_PROJECT} by Outer Loop has failed"; exit 1; }
 
-echo -e "\033[0;32mThe deployment of the Coolstore Application in cn-project${USER_ID} by Outer Loop has succeeded\033[0m"
+ok "The deployment of the Coolstore Application in ${STAGING_PROJECT} by Outer Loop has succeeded"

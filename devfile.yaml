@@ -1,180 +1,187 @@
-schemaVersion: 2.2.0
+schemaVersion: 2.2.2
 metadata:
   name: wksp-end-to-end-dev
+  displayName: Inner Loop + Outer Loop Workshop
+  description: Workspace for the Red Hat Inner Loop + Outer Loop workshop (Coolstore application)
 projects:
-  - attributes:
-      source-origin: branch
+  - name: workshop
     git:
       checkoutFrom:
-        revision: '6.11'
+        revision: main
       remotes:
-        origin: 'https://github.com/RedHat-EMEA-SSA-Team/end-to-end-developer-workshop.git'
-    name: workshop
+        origin: 'https://github.com/mostmark/inner-outer-loop-workshop-code.git'
 components:
-  - container:
-      cpuLimit: 1000m
-      cpuRequest: 50m
-      endpoints:
-        - attributes:
-            protocol: http
-          exposure: public
-          name: 8080-port
-          protocol: http
-          targetPort: 8080
-        - attributes:
-            protocol: http
-          exposure: public
-          name: 9000-port
-          protocol: http
-          targetPort: 9000
-        - attributes:
-            protocol: http
-            public: 'false'
-          exposure: internal
-          name: 5005-port
-          protocol: http
-          targetPort: 5005
-      env:
-        - name: MAVEN_OPTS
-          value: '-Xmx2048m -Duser.home=/home/developer'
-        - name: MAVEN_MIRROR_URL
-          value: 'http://nexus.opentlc-shared.svc:8081/repository/maven-all-public'
-      image: 'quay.io/redhat-emea-ssa-team/workshop-tools:6.9'      
-      memoryLimit: 2048Mi
-      memoryRequest: 256Mi
+  - name: workshop-tools
+    attributes:
+      # Merge the editor (che-code) runtime into this container instead of adding a second one
+      controller.devfile.io/merge-contribution: true
+    container:
+      image: 'quay.io/mostmark/workshop-tools:latest'
+      cpuRequest: 200m
+      cpuLimit: 2000m
+      memoryRequest: 1Gi
+      memoryLimit: 4Gi
       mountSources: true
       sourceMapping: /projects
+      env:
+        - name: MAVEN_OPTS
+          value: '-Xmx1g -Duser.home=/home/developer'
+        - name: MAVEN_MIRROR_URL
+          value: 'http://nexus.nexus.svc:8081/repository/maven-all-public/'
+      endpoints:
+        - name: 8080-port
+          targetPort: 8080
+          exposure: public
+          protocol: http
+          attributes:
+            protocol: http
+        - name: 9000-port
+          targetPort: 9000
+          exposure: public
+          protocol: http
+          attributes:
+            protocol: http
+        - name: 5005-port
+          targetPort: 5005
+          exposure: internal
+          protocol: http
+          attributes:
+            protocol: http
+            public: 'false'
       volumeMounts:
         - name: m2
           path: /home/developer/.m2
-    name: workshop-tools
   - name: m2
     volume:
-      size: 10G    
+      size: 10G
+# Every command sources .tasks/workshop-env.sh, which provides WORKSHOP_USER, DEV_PROJECT
+# (my-project-<user>), STAGING_PROJECT (cn-project-<user>), GITEA_URL and helper functions.
+# Values come from the workspace environment (ConfigMap workshop-env, Secret workshop-credentials)
+# with fallbacks derived from the Dev Spaces namespace devspaces-<user>.
 commands:
-  - exec:
-      commandLine: 'oc login $(oc whoami --show-server) --username=${DEVWORKSPACE_NAMESPACE%devspaces} --password=openshift --insecure-skip-tls-verify && oc project my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} 2> /dev/null'
-      component: workshop-tools
+  - id: openshift---login
+    exec:
       label: OpenShift - Login
-      workingDir: /projects/workshop
-    id: openshift---login
-  - exec:
-      commandLine: 'oc new-project my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
       component: workshop-tools
+      workingDir: /projects/workshop
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && workshop_login && oc project "$DEV_PROJECT"'
+  - id: openshift---create-development-project
+    exec:
       label: OpenShift - Create Development Project
-      workingDir: /projects/workshop
-    id: openshift---create-development-project
-  - exec:
-      commandLine: '[[ ! -z "$(ps aux | grep -v grep | grep "compile quarkus:dev" | awk ''{print $2}'')" ]] &&  echo ''!! Application already running in Dev Mode !!'' ||  mvn compile quarkus:dev -Ddebug=false'
       component: workshop-tools
+      workingDir: /projects/workshop
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && workshop_use_project "$DEV_PROJECT"'
+  - id: inventory---compile-dev-mode
+    exec:
       label: Inventory - Compile (Dev Mode)
-      workingDir: /projects/workshop/labs/inventory-quarkus
-    id: inventory---compile-dev-mode
-  - exec:
-      commandLine: mvn clean package -DskipTests
       component: workshop-tools
+      workingDir: /projects/workshop/labs/inventory-quarkus
+      commandLine: '[[ ! -z "$(ps aux | grep -v grep | grep "compile quarkus:dev" | awk ''{print $2}'')" ]] && echo ''!! Application already running in Dev Mode !!'' || mvn compile quarkus:dev -Ddebug=false'
+  - id: inventory---build
+    exec:
       label: Inventory - Build
-      workingDir: /projects/workshop/labs/inventory-quarkus
-    id: inventory---build
-  - exec:
-      commandLine: mvn package -Dquarkus.container-image.build=true -DskipTests -Dquarkus.container-image.group=$(oc project -q)  -Dquarkus.kubernetes-client.trust-certs=true
       component: workshop-tools
-      label: Inventory - Push Component
       workingDir: /projects/workshop/labs/inventory-quarkus
-    id: inventory---push-component
-  - exec:
-      commandLine: mvn package -Dquarkus.kubernetes.deploy=true -DskipTests -Dquarkus.container-image.group=$(oc project -q)  -Dquarkus.kubernetes-client.trust-certs=true
-      component: workshop-tools
-      label: Inventory - Deploy Component
-      workingDir: /projects/workshop/labs/inventory-quarkus
-    id: inventory---deploy-component
-  - exec:
       commandLine: mvn clean package -DskipTests
+  - id: inventory---push-component
+    exec:
+      label: Inventory - Push Component
       component: workshop-tools
+      workingDir: /projects/workshop/labs/inventory-quarkus
+      commandLine: mvn package -Dquarkus.container-image.build=true -DskipTests -Dquarkus.container-image.group=$(oc project -q) -Dquarkus.kubernetes-client.trust-certs=true
+  - id: inventory---deploy-component
+    exec:
+      label: Inventory - Deploy Component
+      component: workshop-tools
+      workingDir: /projects/workshop/labs/inventory-quarkus
+      commandLine: mvn package -Dquarkus.kubernetes.deploy=true -DskipTests -Dquarkus.container-image.group=$(oc project -q) -Dquarkus.kubernetes-client.trust-certs=true
+  - id: catalog---build
+    exec:
       label: Catalog - Build
-      workingDir: /projects/workshop/labs/catalog-spring-boot
-    id: catalog---build
-  - exec:
-      commandLine: 'mvn spring-boot:run'
       component: workshop-tools
+      workingDir: /projects/workshop/labs/catalog-spring-boot
+      commandLine: mvn clean package -DskipTests
+  - id: catalog---run
+    exec:
       label: Catalog - Run
-      workingDir: /projects/workshop/labs/catalog-spring-boot
-    id: catalog---run
-  - exec:
-      commandLine: mvn package -DskipTests oc:build oc:resource oc:apply
       component: workshop-tools
+      workingDir: /projects/workshop/labs/catalog-spring-boot
+      commandLine: mvn spring-boot:run
+  - id: catalog---deploy-component
+    exec:
       label: Catalog - Deploy Component
+      component: workshop-tools
       workingDir: /projects/workshop/labs/catalog-spring-boot
-    id: catalog---deploy-component
-  - exec:
-      commandLine: 'oc new-build dotnet:9.0 --name gateway-coolstore --labels=component=gateway --env DOTNET_STARTUP_PROJECT=app.csproj --binary=true && oc start-build gateway-coolstore --from-dir=. -w -n my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} && oc new-app gateway-coolstore:latest --name gateway-coolstore  --labels=app=coolstore,app.kubernetes.io/instance=gateway,app.kubernetes.io/part-of=coolstore,app.kubernetes.io/name=gateway,app.openshift.io/runtime=dotnet,component=gateway -n my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} && oc expose svc gateway-coolstore -n my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
-      component: workshop-tools
+      commandLine: mvn package -DskipTests oc:build oc:resource oc:apply
+  - id: gateway---build-and-deploy
+    exec:
       label: Gateway - Build and Deploy Component
+      component: workshop-tools
       workingDir: /projects/workshop/labs/gateway-dotnet
-    id: gateway---build-and-deploy
-  - exec:
-      commandLine: 'for i in {1..60}; do if [ $(curl -s -w "%{http_code}" -o /dev/null http://inventory-coolstore.my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}.svc:8080/api/inventory/329299) == "200" ]; then MSG="\\033[0;32mThe request to Inventory Service has succeeded\\033[0m"; else MSG="\\033[0;31mERROR - The request to Inventory Service has failed\\033[0m"; fi;echo -e $MSG;sleep 1s; done'
-      component: workshop-tools
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && oc new-build dotnet:9.0 --name gateway-coolstore --labels=component=gateway --env DOTNET_STARTUP_PROJECT=app.csproj --binary=true -n "$DEV_PROJECT" && oc start-build gateway-coolstore --from-dir=. -w -n "$DEV_PROJECT" && oc new-app gateway-coolstore:latest --name gateway-coolstore --labels=app=coolstore,app.kubernetes.io/instance=gateway,app.kubernetes.io/part-of=coolstore,app.kubernetes.io/name=gateway,app.openshift.io/runtime=dotnet,component=gateway -n "$DEV_PROJECT" && oc expose svc gateway-coolstore -n "$DEV_PROJECT"'
+  - id: inventory---generate-traffic
+    exec:
       label: Inventory - Generate Traffic
-      workingDir: /projects/workshop/labs/inventory-quarkus
-    id: inventory---generate-traffic
-  - exec:
-      commandLine: 'oc project my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}; oc set probe deployment/gateway-coolstore  --liveness --readiness --period-seconds=5 --get-url=http://:8080/health;oc set probe deployment/web-coolstore  --liveness --readiness --period-seconds=5 --get-url=http://:8080/;echo "Health Probes Done"'
       component: workshop-tools
+      workingDir: /projects/workshop/labs/inventory-quarkus
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && for i in {1..60}; do if [ $(curl -s -w "%{http_code}" -o /dev/null http://inventory-coolstore.$DEV_PROJECT.svc:8080/api/inventory/329299) == "200" ]; then MSG="\\033[0;32mThe request to Inventory Service has succeeded\\033[0m"; else MSG="\\033[0;31mERROR - The request to Inventory Service has failed\\033[0m"; fi; echo -e $MSG; sleep 1s; done'
+  - id: probes---configure-gateway--web
+    exec:
       label: Probes - Configure Gateway & Web
-      workingDir: /projects/workshop
-    id: probes---configure-gateway--web
-  - exec:
-      commandLine: './gateway_generate_traffic.sh cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
       component: workshop-tools
+      workingDir: /projects/workshop
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && oc project "$DEV_PROJECT"; oc set probe deployment/gateway-coolstore --liveness --readiness --period-seconds=5 --get-url=http://:8080/health; oc set probe deployment/web-coolstore --liveness --readiness --period-seconds=5 --get-url=http://:8080/; echo "Health Probes Done"'
+  - id: gateway---generate-traffic
+    exec:
       label: Gateway - Generate Traffic
-      workingDir: /projects/workshop/.tasks
-    id: gateway---generate-traffic
-  - exec:
-      commandLine: './inner_loop_deploy_coolstore.sh my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
       component: workshop-tools
+      workingDir: /projects/workshop/.tasks
+      commandLine: '. ./workshop-env.sh && ./gateway_generate_traffic.sh "$STAGING_PROJECT"'
+  - id: inner-loop---deploy-coolstore
+    exec:
       label: Inner Loop - Deploy Coolstore
-      workingDir: /projects/workshop/.tasks
-    id: inner-loop---deploy-coolstore
-  - exec:
-      commandLine: 'git init; git remote add origin http://gitea-server.gitea.svc:3000/${DEVWORKSPACE_NAMESPACE%devspaces}/inventory-quarkus.git; git add *; git commit -m "Initial"; git push http://${DEVWORKSPACE_NAMESPACE%devspaces}:openshift@gitea-server.gitea.svc:3000/${DEVWORKSPACE_NAMESPACE%devspaces}/inventory-quarkus.git'
       component: workshop-tools
+      workingDir: /projects/workshop/.tasks
+      commandLine: '. ./workshop-env.sh && ./inner_loop_deploy_coolstore.sh "$DEV_PROJECT"'
+  - id: inventory---commit
+    exec:
       label: Inventory - Commit
+      component: workshop-tools
       workingDir: /projects/workshop/labs/inventory-quarkus
-    id: inventory---commit
-  - exec:
-      commandLine: './gitops_export_coolstore.sh my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
-      component: workshop-tools
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && git init -b main; git remote add origin "$GITEA_URL/$WORKSHOP_USER/inventory-quarkus.git" 2> /dev/null || git remote set-url origin "$GITEA_URL/$WORKSHOP_USER/inventory-quarkus.git"; git add -A; git commit -m "Initial"; workshop_git push -u origin main'
+  - id: gitops---export-coolstore
+    exec:
       label: GitOps - Export Coolstore
-      workingDir: /projects/workshop/.tasks
-    id: gitops---export-coolstore
-  - exec:
-      commandLine: 'oc project cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} && ./pipeline_deploy_coolstore.sh cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
       component: workshop-tools
+      workingDir: /projects/workshop/.tasks
+      commandLine: '. ./workshop-env.sh && ./gitops_export_coolstore.sh "$DEV_PROJECT" "$STAGING_PROJECT"'
+  - id: pipeline---deploy-coolstore
+    exec:
       label: Pipeline - Deploy Coolstore
-      workingDir: /projects/workshop/.tasks
-    id: pipeline---deploy-coolstore
-  - exec:
-      commandLine: 'git init; git remote add origin http://gitea-server.gitea.svc:3000/${DEVWORKSPACE_NAMESPACE%devspaces}/inventory-gitops.git 2> /dev/null; git add *; git commit -m "Initial Inventory GitOps"; git push http://${DEVWORKSPACE_NAMESPACE%devspaces}:openshift@gitea-server.gitea.svc:3000/${DEVWORKSPACE_NAMESPACE%devspaces}/inventory-gitops.git'
       component: workshop-tools
+      workingDir: /projects/workshop/.tasks
+      commandLine: '. ./workshop-env.sh && oc project "$STAGING_PROJECT" && ./pipeline_deploy_coolstore.sh "$STAGING_PROJECT"'
+  - id: gitops---commit-inventory
+    exec:
       label: GitOps - Commit Inventory
+      component: workshop-tools
       workingDir: /projects/workshop/labs/gitops/inventory-coolstore
-    id: gitops---commit-inventory
-  - exec:
-      commandLine: './gitops_commit_configure_coolstore.sh ${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
-      component: workshop-tools
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && git init -b main; git remote add origin "$GITEA_URL/$WORKSHOP_USER/inventory-gitops.git" 2> /dev/null || git remote set-url origin "$GITEA_URL/$WORKSHOP_USER/inventory-gitops.git"; git add -A; git commit -m "Initial Inventory GitOps"; workshop_git push -u origin main'
+  - id: gitops---commit--configure-coolstore
+    exec:
       label: GitOps - Commit & Configure Coolstore
+      component: workshop-tools
       workingDir: /projects/workshop/.tasks
-    id: gitops---commit--configure-coolstore
-  - exec:
-      commandLine: 'oc patch deployment/catalog-coolstore --patch ''{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}'' -n cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} && oc patch deployment/gateway-coolstore --patch ''{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}'' -n cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13} '
-      component: workshop-tools
+      commandLine: '. ./workshop-env.sh && ./gitops_commit_configure_coolstore.sh "$WORKSHOP_USER"'
+  - id: service-mesh---deploy-catalog-and-gateway
+    exec:
       label: Service Mesh - Deploy Catalog and Gateway
-      workingDir: /projects/workshop/labs
-    id: service-mesh---deploy-catalog-and-gateway
-  - exec:
-      commandLine: 'git checkout .; git clean -fd; git clean -f; oc delete project my-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}; oc delete deployment,deploymentconfig,buildconfig,imagestream,route,secret,configmap,pvc,service,pipeline,pipelinerun --all --namespace cn-project${DEVWORKSPACE_NAMESPACE:4:${#DEVWORKSPACE_NAMESPACE}-13}'
       component: workshop-tools
+      workingDir: /projects/workshop/labs
+      commandLine: '. /projects/workshop/.tasks/workshop-env.sh && oc patch deployment/catalog-coolstore --patch ''{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}}}'' -n "$STAGING_PROJECT" && oc patch deployment/gateway-coolstore --patch ''{"spec": {"template": {"metadata": {"labels": {"sidecar.istio.io/inject": "true"}}}}}'' -n "$STAGING_PROJECT"'
+  - id: openshift---cleanup
+    exec:
       label: OpenShift - Cleanup
+      component: workshop-tools
       workingDir: /projects/workshop
-    id: openshift---cleanup
+      commandLine: './.tasks/openshift_cleanup.sh'
