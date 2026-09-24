@@ -9,6 +9,8 @@
   <name>CoolStore Catalog Service</name>
   <description>CoolStore Catalog Service with Spring Boot</description>
   <properties>
+    <!-- Generate a Deployment (not a DeploymentConfig) when deploying to OpenShift -->
+    <jkube.build.switchToDeployment>true</jkube.build.switchToDeployment>
     <spring-boot.version>2.1.6.SP3-redhat-00001</spring-boot.version>
     <spring-boot.maven.plugin.version>2.1.4.RELEASE-redhat-00001</spring-boot.maven.plugin.version>
     <spring.k8s.bom.version>1.0.3.RELEASE</spring.k8s.bom.version>
@@ -106,17 +108,9 @@
           <source>1.8</source>
           <target>1.8</target>
           <enricher>
-            <includes>
-            <include>jkube-openshift-deploymentconfig</include>
-            </includes>          
             <excludes>
               <exclude>jkube-prometheus</exclude>
             </excludes>
-            <config>
-              <jkube-openshift-deploymentconfig>
-                <jkube.build.switchToDeployment>true</jkube.build.switchToDeployment>
-              </jkube-openshift-deploymentconfig>
-            </config>
             <config>
               <jkube-openshift-route>
                 <generateRoute>true</generateRoute>
