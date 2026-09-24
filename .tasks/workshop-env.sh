@@ -174,10 +174,13 @@ workshop_argocd() {
 workshop_clean_project() {
   local ns="$1"
   info "Deleting the Coolstore resources in ${ns}"
-  oc delete deployment,buildconfig,build,imagestream,route,service,pvc \
-    --all -n "${ns}" --ignore-not-found > /dev/null 2>&1
+  # Pipeline runs first: their pods keep the pipeline PVCs in use, so deleting the PVCs first would
+  # wait forever. PVCs are deleted without waiting; they go once the run pods are gone.
   oc delete pipelineruns.tekton.dev,taskruns.tekton.dev,pipelines.tekton.dev,tasks.tekton.dev \
     --all -n "${ns}" --ignore-not-found > /dev/null 2>&1
+  oc delete deployment,buildconfig,build,imagestream,route,service \
+    --all -n "${ns}" --ignore-not-found > /dev/null 2>&1
+  oc delete pvc --all -n "${ns}" --ignore-not-found --wait=false > /dev/null 2>&1
   oc delete gateways.networking.istio.io,virtualservices.networking.istio.io,destinationrules.networking.istio.io \
     --all -n "${ns}" --ignore-not-found > /dev/null 2>&1
   oc delete configmap inventory catalog argocd-env-configmap -n "${ns}" --ignore-not-found > /dev/null 2>&1
