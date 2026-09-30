@@ -1,0 +1,52 @@
+---
+# Custom Task used by the Continuous Delivery lab and the coolstore-*-pipeline Pipelines.
+# It syncs an Argo CD Application (<svc>-<user>) and waits until it is healthy.
+#   - ConfigMap argocd-env-configmap: ARGOCD_SERVER (argocd-server.argocd.svc), created by the participant
+#   - Secret argocd-env-secret: ARGOCD_AUTH_TOKEN, pre-created in cn-project-<user> by the workshop
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: argocd-task-sync-and-wait
+  labels:
+    app.kubernetes.io/version: "0.3"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.50.0"
+    tekton.dev/categories: Deployment
+    tekton.dev/tags: deploy
+    tekton.dev/displayName: "argocd"
+    tekton.dev/platforms: "linux/amd64"
+spec:
+  description: >-
+    As part of the Outer Loop lab this task syncs (deploys) an Argo CD application and waits for
+    it to be healthy. The Argo CD server address comes from the ConfigMap argocd-env-configmap
+    (ARGOCD_SERVER) and the API token from the Secret argocd-env-secret (ARGOCD_AUTH_TOKEN).
+  params:
+    - name: application-name
+      type: string
+      description: name of the Argo CD application to sync, for example inventory-<user>
+    - name: revision
+      type: string
+      description: the revision to sync to
+      default: HEAD
+    - name: flags
+      type: string
+      description: extra flags for the argocd CLI
+      default: --plaintext
+  stepTemplate:
+    envFrom:
+      - configMapRef:
+          name: argocd-env-configmap  # ARGOCD_SERVER
+      - secretRef:
+          name: argocd-env-secret  # ARGOCD_AUTH_TOKEN
+  steps:
+    - name: sync-and-wait
+      image: quay.io/argoproj/argocd:v3.4.7
+      script: |
+        #!/bin/sh
+        set -e
+        if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+          echo "ARGOCD_AUTH_TOKEN is missing in the Secret argocd-env-secret" >&2
+          exit 1
+        fi
+        argocd app sync "$(params.application-name)" --revision "$(params.revision)" $(params.flags)
+        argocd app wait "$(params.application-name)" --health $(params.flags)
